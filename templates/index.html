@@ -32,6 +32,14 @@
     {% endif %}
     </div>
 
+    <div style="margin-top: 20px;">
+    <h2>Foto delle stanze</h2>
+    <input id="room-label" list="room-labels" placeholder="stanza (es. cucina)" autocomplete="off">
+    <datalist id="room-labels"></datalist>
+    <button id="room-shot">📸 Scatta</button>
+    <div id="room-status" style="color:#aaa; font-size:0.9em; margin-top:8px;"></div>
+    </div>
+
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <script>
@@ -66,6 +74,21 @@
         document.addEventListener('visibilitychange', () => document.hidden ? stopVideo() : startVideo());
         window.addEventListener('beforeunload', () => { if (feed) socket.emit('video_off'); });
         socket.on('connect', () => { if (!document.hidden) startVideo(); });
+
+        // Raccolta foto delle stanze (salvate sul Mac in data/rooms/<stanza>/)
+        const roomLabel = document.getElementById('room-label');
+        const roomStatus = document.getElementById('room-status');
+        function showRooms(counts) {
+            document.getElementById('room-labels').innerHTML = Object.keys(counts).map(k => `<option value="${k}">`).join('');
+            roomStatus.innerText = Object.entries(counts).map(([k, n]) => `${k}: ${n}`).join(' · ') || 'nessuna foto ancora';
+        }
+        fetch('/api/rooms').then(r => r.json()).then(showRooms).catch(() => {});
+        document.getElementById('room-shot').addEventListener('click', async () => {
+            const res = await fetch('/api/rooms/capture', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                                           body: JSON.stringify({label: roomLabel.value})});
+            const data = await res.json();
+            if (res.ok) showRooms(data.counts); else roomStatus.innerText = '⚠️ ' + data.error;
+        });
         let lastKey = null;
         let audioContext;
         let processor;
@@ -116,6 +139,7 @@
         function sendCommand(cmd) { socket.emit('drive_command', {command: cmd}); }
 
         document.addEventListener('keydown', (e) => {
+            if (e.target.matches && e.target.matches('input, textarea')) return; // non guidare mentre si scrive
             const key = e.key.toLowerCase();
             if (key === 'v' && !e.repeat) startTalking();
             if (key in DRIVE && lastKey !== key) {
@@ -133,6 +157,7 @@
             }
         });
         document.addEventListener('keyup', (e) => {
+            if (e.target.matches && e.target.matches('input, textarea')) return; // non guidare mentre si scrive
             const key = e.key.toLowerCase();
             if (key in DRIVE) {
                 lastKey = null;

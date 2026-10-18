@@ -23,6 +23,8 @@ services:
         dockerfile: Dockerfile.controller
       container_name: raspbot_controller
       env_file: .env
+      volumes:
+        - ./data:/app/data  # foto delle stanze (non versionate)
       ports:
         - "5001:5000"  # <--- Cambia solo il primo numero (Esterno:Interno)
       depends_on:

@@ -1,10 +1,14 @@
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, jsonify
 import paho.mqtt.client as mqtt
 import os
 from dotenv import load_dotenv
 import socket
 from flask_socketio import SocketIO
 import threading
+import re
+import time
+import urllib.request
+from pathlib import Path
 
 load_dotenv()
 ROBOT_IP = os.getenv("ROBOT_IP")
@@ -39,6 +43,35 @@ connect_mqtt()
 @app.route('/')
 def index():
     return render_template('index.html', ROBOT_IP=ROBOT_IP)
+
+# --- Dataset delle stanze: foto etichettate dallo snapshot di ustreamer sul Pi ---
+ROOMS_DIR = Path(os.getenv("ROOMS_DIR", "data/rooms"))
+
+def room_counts():
+    if not ROOMS_DIR.exists():
+        return {}
+    return {d.name: len(list(d.glob("*.jpg"))) for d in sorted(ROOMS_DIR.iterdir()) if d.is_dir()}
+
+@app.route('/api/rooms')
+def api_rooms():
+    return jsonify(room_counts())
+
+@app.route('/api/rooms/capture', methods=['POST'])
+def api_rooms_capture():
+    label = re.sub(r"[^a-z0-9_-]+", "-", (request.get_json(silent=True) or {}).get("label", "").strip().lower()).strip("-")[:30]
+    if not label:
+        return jsonify(error="etichetta mancante"), 400
+    if not ROBOT_IP:
+        return jsonify(error="ROBOT_IP non impostato"), 500
+    try:
+        with urllib.request.urlopen(f"http://{ROBOT_IP}:8081/snapshot", timeout=5) as r:
+            jpg = r.read()
+    except Exception as e:
+        return jsonify(error=f"camera non disponibile: {e}"), 503
+    folder = ROOMS_DIR / label
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / f"{int(time.time() * 1000)}.jpg").write_bytes(jpg)
+    return jsonify(label=label, counts=room_counts())
 
 @socketio.on('drive_command')
 def handle_drive(data):
