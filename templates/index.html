@@ -155,7 +155,8 @@
         const CAM_REPEAT_MS = 120;
         const camTimers = {};
 
-        function sendCommand(cmd) { socket.emit('drive_command', {command: cmd}); }
+        let lastSent = 0;
+        function sendCommand(cmd) { lastSent = Date.now(); socket.emit('drive_command', {command: cmd}); }
 
         document.addEventListener('keydown', (e) => {
             if (e.target.matches && e.target.matches('input, textarea')) return; // non guidare mentre si scrive
@@ -165,6 +166,8 @@
                 lastKey = key;
                 sendCommand(DRIVE[key]);
                 document.getElementById('status').innerText = "In movimento: " + DRIVE[key];
+            } else if (key in DRIVE && Date.now() - lastSent > 250) {
+                sendCommand(DRIVE[key]); // il Pi ferma il robot dopo ~0,8 s senza comandi: si rinnova finché il tasto è premuto
             } else if (key in CAMERA) {
                 e.preventDefault(); // le frecce non devono scorrere la pagina
                 if (camTimers[key] === undefined) {
@@ -175,6 +178,12 @@
                 }
             }
         });
+        // se la pagina perde il focus o la connessione cade non arriva il keyup: si ferma tutto
+        function emergencyStop() { lastKey = null; sendCommand('STOP'); Object.keys(camTimers).forEach(k => { clearInterval(camTimers[k]); delete camTimers[k]; }); }
+        window.addEventListener('blur', emergencyStop);
+        document.addEventListener('visibilitychange', () => { if (document.hidden) emergencyStop(); });
+        socket.on('disconnect', () => { lastKey = null; });
+
         document.addEventListener('keyup', (e) => {
             if (e.target.matches && e.target.matches('input, textarea')) return; // non guidare mentre si scrive
             const key = e.key.toLowerCase();

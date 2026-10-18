@@ -82,9 +82,14 @@ def api_rooms_capture():
     (folder / f"{int(time.time() * 1000)}.jpg").write_bytes(jpg)
     return jsonify(label=label, counts=room_counts())
 
+DRIVE_COMMANDS = {"FORWARD", "BACKWARD", "LEFT", "RIGHT", "STOP",
+                  "CAM_LEFT", "CAM_RIGHT", "CAM_UP", "CAM_DOWN", "CAM_CENTER"}
+
 @socketio.on('drive_command')
 def handle_drive(data):
-    command = data.get('command')
+    command = data.get('command') if isinstance(data, dict) else None
+    if command not in DRIVE_COMMANDS:  # stessa whitelist del Pi: niente payload arbitrari su robot/commands
+        return
     # Forza il publish e controlla se ha successo
     info = mqtt_client.publish("robot/commands", command, qos=1)
     # Questo ti dirà nei log se il messaggio è stato effettivamente inviato

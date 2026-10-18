@@ -34,15 +34,23 @@ def ask_gemma(text):
         return answer if answer in ALLOWED_COMMANDS else "IGNORE"
     except Exception:
         return "IGNORE"
+STOP_WORDS = ("FERMA", "STOP", "BASTA", "FERMATI")
+
 def on_message(client, userdata, msg):
     text = msg.payload.decode()
     print(f"📩 Ricevuto dal robot: '{text}'")
-    
+
+    # lo STOP vocale non passa dall'LLM (fino a 5 s di ritardo): scorciatoia con parole chiave
+    if any(w in text.upper() for w in STOP_WORDS):
+        client.publish("robot/commands", "STOP", qos=1)
+        print("🛑 STOP vocale")
+        return
+
     command = ask_gemma(text)
     
     if "IGNORE" not in command:
         print(f"🤖 Gemma ha deciso: {command}")
-        client.publish("robot/commands", command)
+        client.publish("robot/commands", command, qos=1)
     else:
         print("🤫 Rumore ignorato.")
 
