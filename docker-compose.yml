@@ -1,0 +1,32 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto
+    container_name: mqtt_broker
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf
+
+  brain:
+    build: .
+    container_name: raspbot_brain
+    depends_on:
+      - mosquitto
+    environment:
+      - MQTT_HOST=mosquitto
+      - PYTHONUNBUFFERED=1
+      - OLLAMA_URL=http://host.docker.internal:11434/api/generate
+
+  controller:
+      build: 
+        context: .
+        dockerfile: Dockerfile.controller
+      container_name: raspbot_controller
+      env_file: .env
+      ports:
+        - "5001:5000"  # <--- Cambia solo il primo numero (Esterno:Interno)
+      depends_on:
+        - mosquitto
+      environment:
+        - MQTT_HOST=mosquitto
+        - PYTHONUNBUFFERED=1

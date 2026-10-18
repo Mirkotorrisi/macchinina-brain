@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Raspbot Control</title>
+    <style>
+        body { text-align: center; background: #222; color: white; font-family: sans-serif; }
+        .key-hint { margin-top: 50px; font-size: 1.2em; color: #aaa; }
+        .status { color: #0f0; margin-top: 20px; }
+        #is-talking { width: 10px; height: 10px; background-color: #f00; border-radius: 50%; margin: 0 auto; visibility: hidden; }
+    </style>
+</head>
+<body>
+    <h1>🎮 Raspbot Teleop</h1>
+    <div id="status" class="status">Sistema Pronto</div>
+    
+    <div class="key-hint">Usa <b>W A S D</b> per guidare<br>Rilascia il tasto per fermarti
+    <p>Premi <b>V</b> per parlare<br>Rilascia <b>V</b> per fermarti</p>
+    <p >Premi <b>&larr; &rarr; &uarr; &darr;</b> per muovere la telecamera</p>
+    </div>
+    <div>Audio Stream: <div id="is-talking"></div></div>
+    
+</div>
+
+    <div style="margin-top: 20px;">
+    <h2>Live Feed</h2>
+    {% if ROBOT_IP %}
+    <img src="http://{{ ROBOT_IP }}:8081/stream" 
+         style="border: 2px solid #555; border-radius: 10px; width: 640px; background: #000;"
+         alt="Camera Feed">
+    {% endif %}
+    </div>
+
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script>
+        const socket = io();
+        let lastKey = null;
+        let audioContext;
+        let processor;
+        let input;
+        let globalStream;
+        let mediaRecorder;
+
+        const isTalkingDiv = document.getElementById("is-talking");
+
+
+        async function startTalking() {
+            isTalkingDiv.style.visibility = "visible";
+            // 1. Crea il contesto audio forzando 44100
+            audioContext = new (window.AudioContext || window.webkitAudioContext)({ 
+                sampleRate: 44100 
+            });
+            
+            globalStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            input = audioContext.createMediaStreamSource(globalStream);
+            
+            // 2. IMPORTANTE: Il buffer size deve essere coerente
+            processor = audioContext.createScriptProcessor(4096, 1, 1);
+            processor.onaudioprocess = (e) => {
+                const inputData = event.inputBuffer.getChannelData(0); // Mono
+                socket.emit('client_audio', inputData.buffer);
+            };
+
+            input.connect(processor);
+            processor.connect(audioContext.destination);
+        }
+        function stopTalking() {
+            if (processor) {
+                processor.disconnect();
+                input.disconnect();
+                globalStream.getTracks().forEach(track => track.stop());
+                console.log("🎤 Registrazione fermata.");
+                isTalkingDiv.style.visibility = "hidden";
+                socket.emit('end_audio');
+            }
+        }
+
+        document.addEventListener('keydown', (e) => {
+            const key = e.key.toLowerCase();
+            if (key === 'v' && !e.repeat) startTalking();
+            if (['w','a','s','d', 'arrowleft', 'arrowright', 'arrowup', 'arrowdown', 'c'].includes(key) && lastKey !== key) {
+                lastKey = key;
+                let cmd = {w:'FORWARD', s:'BACKWARD', a:'LEFT', d:'RIGHT', arrowleft:'CAM_LEFT', arrowright:'CAM_RIGHT', arrowup:'CAM_UP', arrowdown:'CAM_DOWN', c:'CAM_CENTER'}[key];
+                socket.emit('drive_command', {command: cmd});
+                document.getElementById('status').innerText = "In movimento: " + cmd;
+                
+            }
+        });
+        document.addEventListener('keyup', (e) => {
+            if (['w','a','s','d', 'arrowleft', 'arrowright', 'arrowup', 'arrowdown', 'c'].includes(e.key.toLowerCase())) {
+                lastKey = null;
+                socket.emit('drive_command', {command: 'STOP'});
+                document.getElementById('status').innerText = "STOP";
+            }
+            if (e.key.toLowerCase() === 'v') stopTalking();
+        });
+
+        navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+            mediaRecorder = new MediaRecorder(stream);
+            mediaRecorder.ondataavailable = (event) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(event.data); 
+                reader.onloadend = () => {
+                    socket.emit('client_audio', {data: reader.result.split(',')[1]});
+                };
+            };
+        });
+
+        let audioCtx = new (window.AudioContext || window.webkitAudioContext)({sampleRate: 44100});
+        let nextStartTime = 0;
+
+        socket.on('robot_audio_stream', (buffer) => {
+            // 1. Convertiamo il buffer (Int16) in Float32Array per l'AudioContext
+            const int16Array = new Int16Array(buffer);
+            const float32Array = new Float32Array(int16Array.length);
+            
+            for (let i = 0; i < int16Array.length; i++) {
+                float32Array[i] = int16Array[i] / 32768.0;
+            }
+
+            // 2. Creiamo un piccolo buffer audio
+            const audioBuffer = audioCtx.createBuffer(1, float32Array.length, 44100);
+            audioBuffer.getChannelData(0).set(float32Array);
+
+            // 3. Lo suoniamo in coda agli altri
+            const source = audioCtx.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(audioCtx.destination);
+
+            // Sincronizzazione per evitare lag o sovrapposizioni
+            const currentTime = audioCtx.currentTime;
+            if (nextStartTime < currentTime) {
+                nextStartTime = currentTime;
+            }
+            
+            source.start(nextStartTime);
+            nextStartTime += audioBuffer.duration;
+        });
+
+    </script>
+</body>
+</html>
