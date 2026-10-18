@@ -24,9 +24,11 @@
     <div style="margin-top: 20px;">
     <h2>Live Feed</h2>
     {% if ROBOT_IP %}
-    <img src="http://{{ ROBOT_IP }}:8081/stream" 
-         style="border: 2px solid #555; border-radius: 10px; width: 640px; background: #000;"
+    <!-- Il video parte solo quando la pagina è visibile: la camera del robot resta spenta altrimenti (risparmio batteria) -->
+    <img id="camera-feed" data-src="http://{{ ROBOT_IP }}:8081/stream"
+         style="border: 2px solid #555; border-radius: 10px; width: 640px; min-height: 120px; background: #000;"
          alt="Camera Feed">
+    <div id="video-status" style="color:#aaa; font-size:0.9em;"></div>
     {% endif %}
     </div>
 
@@ -34,6 +36,36 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <script>
         const socket = io();
+
+        // Video on-demand: keepalive finché la pagina è visibile, spento quando non lo è
+        const feed = document.getElementById('camera-feed');
+        const videoStatus = document.getElementById('video-status');
+        let keepaliveTimer = null, retryTimer = null;
+        function startVideo() {
+            if (!feed || keepaliveTimer) return;
+            socket.emit('video_keepalive');
+            keepaliveTimer = setInterval(() => socket.emit('video_keepalive'), 10000);
+            videoStatus.innerText = 'Avvio camera...';
+            connectFeed();
+        }
+        function connectFeed() {
+            clearTimeout(retryTimer);
+            feed.onload = () => { videoStatus.innerText = ''; };
+            // il robot impiega 1-2 secondi ad accendere la camera: si riprova finché non risponde
+            feed.onerror = () => { retryTimer = setTimeout(connectFeed, 1500); };
+            feed.src = feed.dataset.src + '?t=' + Date.now();
+        }
+        function stopVideo() {
+            if (!feed || !keepaliveTimer) return;
+            clearInterval(keepaliveTimer); keepaliveTimer = null;
+            clearTimeout(retryTimer);
+            feed.removeAttribute('src');
+            socket.emit('video_off');
+            videoStatus.innerText = 'Camera spenta (pagina in background)';
+        }
+        document.addEventListener('visibilitychange', () => document.hidden ? stopVideo() : startVideo());
+        window.addEventListener('beforeunload', () => { if (feed) socket.emit('video_off'); });
+        socket.on('connect', () => { if (!document.hidden) startVideo(); });
         let lastKey = null;
         let audioContext;
         let processor;
@@ -75,24 +107,42 @@
             }
         }
 
+        // Tasti di guida (STOP al rilascio) e tasti camera (ripetuti finché premuti, senza STOP)
+        const DRIVE = {w:'FORWARD', s:'BACKWARD', a:'LEFT', d:'RIGHT'};
+        const CAMERA = {arrowleft:'CAM_LEFT', arrowright:'CAM_RIGHT', arrowup:'CAM_UP', arrowdown:'CAM_DOWN', c:'CAM_CENTER'};
+        const CAM_REPEAT_MS = 120;
+        const camTimers = {};
+
+        function sendCommand(cmd) { socket.emit('drive_command', {command: cmd}); }
+
         document.addEventListener('keydown', (e) => {
             const key = e.key.toLowerCase();
             if (key === 'v' && !e.repeat) startTalking();
-            if (['w','a','s','d', 'arrowleft', 'arrowright', 'arrowup', 'arrowdown', 'c'].includes(key) && lastKey !== key) {
+            if (key in DRIVE && lastKey !== key) {
                 lastKey = key;
-                let cmd = {w:'FORWARD', s:'BACKWARD', a:'LEFT', d:'RIGHT', arrowleft:'CAM_LEFT', arrowright:'CAM_RIGHT', arrowup:'CAM_UP', arrowdown:'CAM_DOWN', c:'CAM_CENTER'}[key];
-                socket.emit('drive_command', {command: cmd});
-                document.getElementById('status').innerText = "In movimento: " + cmd;
-                
+                sendCommand(DRIVE[key]);
+                document.getElementById('status').innerText = "In movimento: " + DRIVE[key];
+            } else if (key in CAMERA) {
+                e.preventDefault(); // le frecce non devono scorrere la pagina
+                if (camTimers[key] === undefined) {
+                    sendCommand(CAMERA[key]);
+                    if (key !== 'c') camTimers[key] = setInterval(() => sendCommand(CAMERA[key]), CAM_REPEAT_MS);
+                    else camTimers[key] = null;
+                    document.getElementById('status').innerText = "Camera: " + CAMERA[key];
+                }
             }
         });
         document.addEventListener('keyup', (e) => {
-            if (['w','a','s','d', 'arrowleft', 'arrowright', 'arrowup', 'arrowdown', 'c'].includes(e.key.toLowerCase())) {
+            const key = e.key.toLowerCase();
+            if (key in DRIVE) {
                 lastKey = null;
-                socket.emit('drive_command', {command: 'STOP'});
+                sendCommand('STOP');
                 document.getElementById('status').innerText = "STOP";
+            } else if (key in CAMERA) {
+                clearInterval(camTimers[key]);
+                delete camTimers[key];
             }
-            if (e.key.toLowerCase() === 'v') stopTalking();
+            if (key === 'v') stopTalking();
         });
 
         navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {

@@ -51,6 +51,15 @@ def handle_drive(data):
     else:
         print(f"❌ Fallito invio MQTT: {info.rc}", flush=True)
 
+# La camera del robot è accesa solo finché la pagina è aperta e visibile (keepalive ogni pochi secondi)
+@socketio.on('video_keepalive')
+def handle_video_keepalive():
+    mqtt_client.publish("robot/video", "ON")
+
+@socketio.on('video_off')
+def handle_video_off():
+    mqtt_client.publish("robot/video", "OFF")
+
 # Nel file app.py del Mac
 @socketio.on('client_audio')
 def handle_client_audio(data):
