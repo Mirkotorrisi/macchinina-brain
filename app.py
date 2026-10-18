@@ -34,6 +34,7 @@ AUDIO_CONNECTIONS = {}
 def on_mqtt_connect(client, userdata, flags, reason_code, properties=None):
     # le sottoscrizioni vanno rifatte a ogni riconnessione al broker
     client.subscribe("robot/perception")
+    client.subscribe("robot/autonomy/log")
 
 
 mqtt_client.on_connect = on_mqtt_connect
@@ -112,6 +113,18 @@ def handle_video_off():
 def handle_perception_toggle(data):
     mqtt_client.publish("robot/perception/control", "ON" if data.get('on') else "OFF")
 
+# Autonomia: modo (OFF/DRYRUN/ON, "ON" va rinnovato ogni 10 s o il Pi si spegne da solo) e obiettivo
+@socketio.on('autonomy_mode')
+def handle_autonomy_mode(data):
+    mode = data.get('mode') if isinstance(data, dict) else None
+    if mode in ("OFF", "DRYRUN", "ON"):
+        mqtt_client.publish("robot/autonomy/control", mode, qos=1)
+
+@socketio.on('autonomy_goal')
+def handle_autonomy_goal(data):
+    room = data.get('room', '') if isinstance(data, dict) else ''
+    mqtt_client.publish("robot/goal", re.sub(r"[^a-z0-9_-]+", "-", str(room).strip().lower())[:30], qos=1)
+
 # Nel file app.py del Mac
 @socketio.on('client_audio')
 def handle_client_audio(data):
@@ -142,6 +155,8 @@ def handle_mqtt_message(client, userdata, message):
         socketio.emit('robot_audio', {'data': message.payload.decode()})
     elif message.topic == "robot/perception":
         socketio.emit('perception', json.loads(message.payload.decode()))
+    elif message.topic == "robot/autonomy/log":
+        socketio.emit('autonomy_log', json.loads(message.payload.decode()))
     elif message.topic == "robot/speech":
         # Invia la trascrizione di Whisper al browser
         socketio.emit('speech_transcript', {'text': message.payload.decode()})

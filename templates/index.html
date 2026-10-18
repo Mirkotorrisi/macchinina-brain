@@ -39,6 +39,18 @@
     </div>
 
     <div style="margin-top: 20px;">
+    <h2>Autonomia</h2>
+    <select id="autonomy-mode">
+        <option value="OFF">Spenta</option>
+        <option value="DRYRUN">Prova (decide ma non si muove)</option>
+        <option value="ON">Accesa (si muove da sola!)</option>
+    </select>
+    <input id="autonomy-goal" list="room-labels" placeholder="vai in... (stanza)" autocomplete="off">
+    <button id="autonomy-go">Vai</button>
+    <div id="autonomy-log" style="color:#aaa; margin-top:8px;"></div>
+    </div>
+
+    <div style="margin-top: 20px;">
     <h2>Foto delle stanze</h2>
     <input id="room-label" list="room-labels" placeholder="stanza (es. cucina)" autocomplete="off">
     <datalist id="room-labels"></datalist>
@@ -92,6 +104,24 @@
             if (!percToggle.checked) return;
             const room = p.room ? `📍 ${p.room} (${p.margin})` : '📍 stanza non sicura';
             percText.innerText = `${room} · 👁️ ${p.text}`;
+        });
+
+        // Autonomia: "ON" si rinnova ogni 10 s finché la pagina è visibile; senza rinnovo il Pi si spegne da solo
+        const autoMode = document.getElementById('autonomy-mode');
+        const autoLog = document.getElementById('autonomy-log');
+        let autoBeat = null;
+        function setAutonomy(mode) {
+            autoMode.value = mode;
+            socket.emit('autonomy_mode', {mode});
+            clearInterval(autoBeat); autoBeat = null;
+            if (mode === 'ON') autoBeat = setInterval(() => socket.emit('autonomy_mode', {mode: 'ON'}), 10000);
+        }
+        autoMode.addEventListener('change', () => setAutonomy(autoMode.value));
+        document.addEventListener('visibilitychange', () => { if (document.hidden && autoMode.value !== 'OFF') setAutonomy('OFF'); });
+        document.getElementById('autonomy-go').addEventListener('click', () => socket.emit('autonomy_goal', {room: document.getElementById('autonomy-goal').value}));
+        socket.on('autonomy_log', (m) => {
+            if (m.event === 'override' || m.event === 'spenta') { autoMode.value = 'OFF'; clearInterval(autoBeat); autoBeat = null; }
+            autoLog.innerText = `[${m.mode || ''}] ${m.event}: ${m.why}` + (m.room ? ` · 📍 ${m.room}` : '');
         });
 
         // Raccolta foto delle stanze (salvate sul Mac in data/rooms/<stanza>/)
