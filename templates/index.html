@@ -39,6 +39,13 @@
     </div>
 
     <div style="margin-top: 20px;">
+    <h2>Registra guida</h2>
+    <input id="demo-goal" list="room-labels" placeholder="dove stai andando? (es. cucina)" autocomplete="off">
+    <button id="demo-toggle">⏺ Registra</button>
+    <div id="demo-status" style="color:#aaa; margin-top:8px;">Accendi anche "Il robot guarda", poi guida con W A S D.</div>
+    </div>
+
+    <div style="margin-top: 20px;">
     <h2>Autonomia</h2>
     <select id="autonomy-mode">
         <option value="OFF">Spenta</option>
@@ -104,6 +111,22 @@
             if (!percToggle.checked) return;
             const room = p.room ? `📍 ${p.room} (${p.margin})` : '📍 stanza non sicura';
             percText.innerText = `${room} · 👁️ ${p.text}`;
+        });
+
+        // Registrazione guide: salva (stato percepito, comando) in data/demos/ sul Mac
+        const demoBtn = document.getElementById('demo-toggle');
+        const demoStatus = document.getElementById('demo-status');
+        let demoOn = false;
+        demoBtn.addEventListener('click', () => {
+            demoOn = !demoOn;
+            if (demoOn) {
+                if (!percToggle.checked) { percToggle.checked = true; socket.emit('perception_toggle', {on: true}); }
+                socket.emit('demo_start', {goal: document.getElementById('demo-goal').value});
+            } else socket.emit('demo_stop');
+            demoBtn.innerText = demoOn ? '⏹ Ferma' : '⏺ Registra';
+        });
+        socket.on('demo_status', (s) => {
+            demoStatus.innerText = s.recording ? `⏺ in registrazione: ${s.rows} righe` : `salvate ${s.rows} righe`;
         });
 
         // Autonomia: "ON" si rinnova ogni 10 s finché la pagina è visibile; senza rinnovo il Pi si spegne da solo

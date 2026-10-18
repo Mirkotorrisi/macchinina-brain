@@ -10,6 +10,7 @@ import json
 import time
 import urllib.request
 from pathlib import Path
+from demo_recorder import DemoRecorder
 
 load_dotenv()
 ROBOT_IP = os.getenv("ROBOT_IP")
@@ -54,6 +55,9 @@ connect_mqtt()
 def index():
     return render_template('index.html', ROBOT_IP=ROBOT_IP)
 
+demos = DemoRecorder(os.getenv("DEMOS_DIR", "data/demos"))
+last_perception = {}
+
 # --- Dataset delle stanze: foto etichettate dallo snapshot di ustreamer sul Pi ---
 ROOMS_DIR = Path(os.getenv("ROOMS_DIR", "data/rooms"))
 
@@ -80,7 +84,10 @@ def api_rooms_capture():
         return jsonify(error=f"camera non disponibile: {e}"), 503
     folder = ROOMS_DIR / label
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / f"{int(time.time() * 1000)}.jpg").write_bytes(jpg)
+    stamp = int(time.time() * 1000)
+    (folder / f"{stamp}.jpg").write_bytes(jpg)
+    if last_perception.get("wifi"):  # impronta WiFi accanto alla foto, per confrontare WiFi e visione
+        (folder / f"{stamp}.json").write_text(json.dumps({"wifi": last_perception["wifi"]}))
     return jsonify(label=label, counts=room_counts())
 
 DRIVE_COMMANDS = {"FORWARD", "BACKWARD", "LEFT", "RIGHT", "STOP",
@@ -91,6 +98,7 @@ def handle_drive(data):
     command = data.get('command') if isinstance(data, dict) else None
     if command not in DRIVE_COMMANDS:  # stessa whitelist del Pi: niente payload arbitrari su robot/commands
         return
+    demos.command(command)
     # Forza il publish e controlla se ha successo
     info = mqtt_client.publish("robot/commands", command, qos=1)
     # Questo ti dirà nei log se il messaggio è stato effettivamente inviato
@@ -107,6 +115,17 @@ def handle_video_keepalive():
 @socketio.on('video_off')
 def handle_video_off():
     mqtt_client.publish("robot/video", "OFF")
+
+# Registrazione delle guide manuali (data/demos/*.jsonl): stato percepito + comando dato
+@socketio.on('demo_start')
+def handle_demo_start(data):
+    path = demos.start(data.get('goal', '') if isinstance(data, dict) else '')
+    socketio.emit('demo_status', {'recording': True, 'file': os.path.basename(path), 'rows': 0})
+
+@socketio.on('demo_stop')
+def handle_demo_stop():
+    rows = demos.stop()
+    socketio.emit('demo_status', {'recording': False, 'rows': rows})
 
 # Percezione del robot: interruttore dalla UI e flusso di ciò che vede (robot/perception)
 @socketio.on('perception_toggle')
@@ -154,7 +173,13 @@ def handle_mqtt_message(client, userdata, message):
         # Invia l'audio al browser via SocketIO
         socketio.emit('robot_audio', {'data': message.payload.decode()})
     elif message.topic == "robot/perception":
-        socketio.emit('perception', json.loads(message.payload.decode()))
+        p = json.loads(message.payload.decode())
+        last_perception.clear()
+        last_perception.update(p)
+        demos.update_state(p)
+        if demos.active:
+            socketio.emit('demo_status', {'recording': True, 'rows': demos.rows})
+        socketio.emit('perception', p)
     elif message.topic == "robot/autonomy/log":
         socketio.emit('autonomy_log', json.loads(message.payload.decode()))
     elif message.topic == "robot/speech":
