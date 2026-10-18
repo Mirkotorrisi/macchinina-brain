@@ -33,6 +33,12 @@
     </div>
 
     <div style="margin-top: 20px;">
+    <h2>Percezione</h2>
+    <label><input type="checkbox" id="perception-toggle"> Il robot guarda (accende la camera)</label>
+    <div id="perception-text" style="color:#aaa; margin-top:8px;"></div>
+    </div>
+
+    <div style="margin-top: 20px;">
     <h2>Foto delle stanze</h2>
     <input id="room-label" list="room-labels" placeholder="stanza (es. cucina)" autocomplete="off">
     <datalist id="room-labels"></datalist>
@@ -74,6 +80,19 @@
         document.addEventListener('visibilitychange', () => document.hidden ? stopVideo() : startVideo());
         window.addEventListener('beforeunload', () => { if (feed) socket.emit('video_off'); });
         socket.on('connect', () => { if (!document.hidden) startVideo(); });
+
+        // Percezione: il Pi pubblica ciò che vede (oggetti + stanza) su robot/perception
+        const percToggle = document.getElementById('perception-toggle');
+        const percText = document.getElementById('perception-text');
+        percToggle.addEventListener('change', () => {
+            socket.emit('perception_toggle', {on: percToggle.checked});
+            if (!percToggle.checked) percText.innerText = '';
+        });
+        socket.on('perception', (p) => {
+            if (!percToggle.checked) return;
+            const room = p.room ? `📍 ${p.room} (${p.margin})` : '📍 stanza non sicura';
+            percText.innerText = `${room} · 👁️ ${p.text}`;
+        });
 
         // Raccolta foto delle stanze (salvate sul Mac in data/rooms/<stanza>/)
         const roomLabel = document.getElementById('room-label');

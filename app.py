@@ -6,6 +6,7 @@ import socket
 from flask_socketio import SocketIO
 import threading
 import re
+import json
 import time
 import urllib.request
 from pathlib import Path
@@ -28,6 +29,14 @@ mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 
 # In alto nel file app.py
 AUDIO_CONNECTIONS = {}
+
+
+def on_mqtt_connect(client, userdata, flags, reason_code, properties=None):
+    # le sottoscrizioni vanno rifatte a ogni riconnessione al broker
+    client.subscribe("robot/perception")
+
+
+mqtt_client.on_connect = on_mqtt_connect
 
 
 def connect_mqtt():
@@ -93,6 +102,11 @@ def handle_video_keepalive():
 def handle_video_off():
     mqtt_client.publish("robot/video", "OFF")
 
+# Percezione del robot: interruttore dalla UI e flusso di ciò che vede (robot/perception)
+@socketio.on('perception_toggle')
+def handle_perception_toggle(data):
+    mqtt_client.publish("robot/perception/control", "ON" if data.get('on') else "OFF")
+
 # Nel file app.py del Mac
 @socketio.on('client_audio')
 def handle_client_audio(data):
@@ -121,6 +135,8 @@ def handle_mqtt_message(client, userdata, message):
     if message.topic == "robot/audio_out":
         # Invia l'audio al browser via SocketIO
         socketio.emit('robot_audio', {'data': message.payload.decode()})
+    elif message.topic == "robot/perception":
+        socketio.emit('perception', json.loads(message.payload.decode()))
     elif message.topic == "robot/speech":
         # Invia la trascrizione di Whisper al browser
         socketio.emit('speech_transcript', {'text': message.payload.decode()})
