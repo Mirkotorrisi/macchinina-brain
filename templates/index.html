@@ -231,8 +231,15 @@
                 }
             }
         });
-        // se la pagina perde il focus o la connessione cade non arriva il keyup: si ferma tutto
-        function emergencyStop() { lastKey = null; sendCommand('STOP'); Object.keys(camTimers).forEach(k => { clearInterval(camTimers[k]); delete camTimers[k]; }); }
+        // se la pagina perde il focus o la connessione cade non arriva il keyup: si ferma tutto.
+        // Lo STOP parte solo se in quel momento un tasto di guida è premuto: uno STOP mandato a ogni cambio di finestra
+        // sospenderebbe per 30 s i movimenti di Claude (per il Pi è un comando dell'operatore) anche con nessuno alla guida.
+        function emergencyStop() {
+            const driving = lastKey !== null;
+            lastKey = null;
+            if (driving) sendCommand('STOP');
+            Object.keys(camTimers).forEach(k => { clearInterval(camTimers[k]); delete camTimers[k]; });
+        }
         window.addEventListener('blur', emergencyStop);
         document.addEventListener('visibilitychange', () => { if (document.hidden) emergencyStop(); });
         socket.on('disconnect', () => { lastKey = null; });

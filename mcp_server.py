@@ -109,7 +109,7 @@ def blocked_message():
     n = state["blocked_s"]
     if state.get("blocked_reason") == "stop recente":
         return {"error": f"movimenti sospesi ancora per ~{n:.0f} s dopo uno STOP (sicurezza): riprova tra poco."}
-    return blocked_message()
+    return {"error": f"controllo manuale attivo: Mirko ha la precedenza ancora per circa {n:.0f} s, il robot non si è mosso. Non insistere: chiedi a lui."}
 
 
 def send(command):
