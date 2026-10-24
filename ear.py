@@ -30,9 +30,18 @@ class Ear:
         self._buf = bytearray()
         self._lock = threading.Lock()
         self._vad = None
+        self._mute_until = 0.0
         threading.Thread(target=self._worker, daemon=True).start()
 
+    def mute(self, seconds):
+        """Scarta l'audio per `seconds`: serve quando il robot parla, per non trascrivere la propria voce."""
+        self._mute_until = time.time() + seconds
+        with self._lock:
+            self._buf.clear()
+
     def feed(self, pcm):
+        if time.time() < self._mute_until:
+            return
         with self._lock:
             self._buf += pcm
 

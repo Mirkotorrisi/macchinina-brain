@@ -5,12 +5,18 @@ restano sul Pi. Qui si aggiungono solo limiti di durata ai comandi di Claude.
 """
 import json
 import os
+import re
+import socket
+import subprocess
+import tempfile
 import threading
 import time
 import urllib.request
+import wave
 from collections import deque
 from pathlib import Path
 
+import numpy as np
 import paho.mqtt.client as mqtt
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP, Image
@@ -25,6 +31,10 @@ MOVES = {"forward": "FORWARD", "backward": "BACKWARD", "left": "LEFT", "right": 
 CAMERA = {"left": "CAM_LEFT", "right": "CAM_RIGHT", "up": "CAM_UP", "down": "CAM_DOWN", "center": "CAM_CENTER"}
 MAX_DRIVE_S = 3.0  # il Pi scade dopo 0,8 s: qui si rinnova ogni 250 ms, ma mai oltre questo tetto
 REPEAT_S = 0.25
+SAY_MAX_CHARS = 300
+SAY_RATE = 44100  # audio_server.py riproduce a 44100 Hz (aplay -r 44100)
+SAY_PEAK = 0.08  # audio_server.py moltiplica x10 (pensato per il microfono del browser): così il picco arriva a ~0,8
+SAY_CHUNK = 1024  # byte per invio (multiplo di 4): il server scarta la sessione se riceve float32 spezzati
 
 state = {"perception": None, "perception_at": 0.0}
 speech = deque(maxlen=50)  # (timestamp, testo) non ancora letti
@@ -158,6 +168,37 @@ def listen(timeout_s: float = 10.0) -> list | str:
         got = [{"age_s": round(time.time() - t, 1), "text": text} for t, text in speech]
         speech.clear()
     return got or "nessuno ha parlato"
+
+
+@mcp.tool()
+def say(text: str, voice: str = "Alice") -> str:
+    """Il robot parla: sintesi vocale sul Mac (voce italiana, di default Alice; altre: Eddy, Flo) riprodotta dall'altoparlante del robot. Massimo 300 caratteri: frasi brevi. L'ascolto è sospeso mentre parla, per non sentire sé stesso. Torna quando ha finito di parlare."""
+    text = text.strip()[:SAY_MAX_CHARS]
+    if not text:
+        return "testo vuoto"
+    if not re.fullmatch(r"[A-Za-z]+( \([A-Za-z() ]+\))?", voice):
+        return "voce non valida"
+    with tempfile.TemporaryDirectory() as d:
+        aiff, wav = Path(d) / "say.aiff", Path(d) / "say.wav"
+        subprocess.run(["say", "-v", voice, "-o", str(aiff), "-f", "-"], input=text.encode(), check=True, timeout=30)
+        subprocess.run(["afconvert", "-f", "WAVE", "-d", f"LEI16@{SAY_RATE}", "-c", "1", str(aiff), str(wav)],
+                       check=True, timeout=30)
+        with wave.open(str(wav)) as w:
+            pcm = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16)
+    audio = pcm.astype(np.float32) / 32768.0
+    audio = audio / (float(np.abs(audio).max()) or 1.0) * SAY_PEAK
+    audio = np.concatenate([audio, np.zeros(int(0.6 * SAY_RATE), dtype=np.float32)])  # coda: il server taglia aplay alla chiusura
+    data = audio.astype("<f4").tobytes()
+    seconds = len(audio) / SAY_RATE
+    ear.mute(seconds + 1.5)
+    with socket.create_connection((ROBOT_HOST, 9999), timeout=5) as s:
+        s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        start = time.monotonic()
+        per_chunk = SAY_CHUNK / 4 / SAY_RATE
+        for n, i in enumerate(range(0, len(data), SAY_CHUNK)):
+            s.sendall(data[i:i + SAY_CHUNK])
+            time.sleep(max(0.0, start + (n + 1) * per_chunk * 0.97 - time.monotonic()))
+    return f"detto ({seconds:.1f} s): {text}"
 
 
 @mcp.tool()
