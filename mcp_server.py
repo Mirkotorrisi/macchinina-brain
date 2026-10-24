@@ -15,6 +15,8 @@ import paho.mqtt.client as mqtt
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP, Image
 
+from ear import Ear
+
 load_dotenv(Path(__file__).with_name(".env"))
 MQTT_HOST = os.getenv("MQTT_HOST", "localhost")  # il broker del compose espone 1883 sul Mac
 ROBOT_HOST = os.getenv("ROBOT_HOST", "macchinina.local")  # nome mDNS: l'IP del Pi cambia (DHCP). Il server gira sul Mac, non in Docker
@@ -29,21 +31,30 @@ speech = deque(maxlen=50)  # (timestamp, testo) non ancora letti
 speech_lock = threading.Condition()
 
 
+def heard(text):
+    with speech_lock:
+        speech.append((time.time(), text))
+        speech_lock.notify_all()
+
+
+ear = Ear(heard, model_size=os.getenv("WHISPER_MODEL", "small"))  # il modello si carica alla prima voce
+
+
 def on_connect(client, userdata, flags, reason_code, properties=None):
-    client.subscribe([("robot/perception", 0), ("robot/speech", 0)])
+    client.subscribe([("robot/perception", 0), ("robot/speech", 0), ("robot/audio_in", 0)])
 
 
 def on_message(client, userdata, msg):
-    if msg.topic == "robot/perception":
+    if msg.topic == "robot/audio_in":
+        ear.feed(msg.payload)
+    elif msg.topic == "robot/perception":
         try:
             state["perception"] = json.loads(msg.payload.decode())
             state["perception_at"] = time.time()
         except ValueError:
             pass
     elif msg.topic == "robot/speech":
-        with speech_lock:
-            speech.append((time.time(), msg.payload.decode()))
-            speech_lock.notify_all()
+        heard(msg.payload.decode())
 
 
 mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
@@ -137,15 +148,16 @@ def get_camera_image() -> Image:
 
 @mcp.tool()
 def listen(timeout_s: float = 10.0) -> list | str:
-    """Aspetta fino a timeout_s secondi (max 30) che qualcuno parli al robot e restituisce le trascrizioni Whisper non ancora lette. Se nessuno parla torna una stringa vuota di risultati."""
+    """Accende il microfono del robot e aspetta fino a timeout_s secondi (max 30) che qualcuno parli; restituisce le frasi trascritte (Whisper sul Mac) non ancora lette, con age_s. La prima volta Whisper può impiegare un minuto a scaricare il modello. Il microfono si spegne da solo pochi secondi dopo. Da fermo: i motori coprono la voce."""
     timeout_s = max(0.0, min(float(timeout_s), 30.0))
     deadline = time.time() + timeout_s
     with speech_lock:
         while not speech and time.time() < deadline:
-            speech_lock.wait(deadline - time.time())
-        heard = [{"age_s": round(time.time() - t, 1), "text": text} for t, text in speech]
+            mqtt_client.publish("robot/audio/control", "ON")  # keepalive: sul Pi scade dopo 15 s
+            speech_lock.wait(min(5.0, deadline - time.time()))
+        got = [{"age_s": round(time.time() - t, 1), "text": text} for t, text in speech]
         speech.clear()
-    return heard or "nessuno ha parlato"
+    return got or "nessuno ha parlato"
 
 
 @mcp.tool()
